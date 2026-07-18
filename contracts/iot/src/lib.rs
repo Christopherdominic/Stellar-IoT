@@ -57,14 +57,39 @@ pub struct Credit {
 }
 
 #[contracttype]
+#[derive(Clone, PartialEq)]
+pub enum SubscriptionTier {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct Subscription {
+    pub user: Address,
+    pub device_id: Symbol,
+    pub tier: SubscriptionTier,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
+    pub amount_paid: i128,
+    pub active: bool,
+}
+
+#[contracttype]
 pub enum DataKey {
     Admin,
     PlatformFeeBps,
     PlatformFeeBalance(Address),
     DevicePrice(Symbol),
     DeviceOwner(Symbol),
+    DeviceDuration(Symbol),
     /// Prepaid credits: (user, device_id) → Credit
     Credit(Address, Symbol),
+    /// Active subscriptions: (user, device_id) → Subscription
+    Subscription(Address, Symbol),
+    /// Revoked access: (user, device_id) → bool
+    RevokedAccess(Address, Symbol),
     /// true when contract is paused
     Paused,
     /// ledger sequence at which unpause was scheduled
@@ -126,6 +151,43 @@ impl IotContract {
         env.storage()
             .instance()
             .set(&DataKey::DeviceOwner(device_id), &owner);
+    }
+
+    /// Register a device with owner, price, and access duration (in ledgers).
+    /// Alias for init_device that also stores the duration and emits an event.
+    pub fn register_device(env: Env, owner: Address, device_id: Symbol, price: i128, duration: u32) {
+        if price <= 0 {
+            panic!("price must be positive");
+        }
+        if duration == 0 {
+            panic!("duration must be positive");
+        }
+        owner.require_auth();
+        env.storage().instance().set(&DataKey::DevicePrice(device_id.clone()), &price);
+        env.storage().instance().set(&DataKey::DeviceOwner(device_id.clone()), &owner);
+        env.storage().instance().set(&DataKey::DeviceDuration(device_id.clone()), &duration);
+        env.events().publish(
+            (symbol_short!("regdev"), device_id),
+            (owner, price, duration),
+        );
+    }
+
+    /// Revoke access for a user on a device. Owner-only.
+    /// Marks the (user, device_id) pair as revoked so verify_access returns false.
+    pub fn revoke_access(env: Env, owner: Address, device_id: Symbol, user: Address) {
+        owner.require_auth();
+        let stored_owner = Self::get_device_owner(env.clone(), device_id.clone())
+            .unwrap_or_else(|| panic!("device not registered"));
+        if owner != stored_owner {
+            panic!("not device owner");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::RevokedAccess(user.clone(), device_id.clone()), &true);
+        env.events().publish(
+            (symbol_short!("revoked"), device_id),
+            user,
+        );
     }
 
     /// Get device price.
@@ -318,6 +380,10 @@ impl IotContract {
     ) -> bool {
         user.require_auth();
 
+        if Self::is_paused(env.clone()) {
+            panic!("contract paused");
+        }
+
         // Check active subscription first — free access for subscribers.
         if Self::verify_access(env.clone(), device_id.clone(), user.clone()) {
             env.events()
@@ -419,9 +485,17 @@ impl IotContract {
         Self::request_access(env, device_id, user, token, amount)
     }
 
-    /// Check whether a user currently has active (non-expired, non-cancelled) access
+    /// Check whether a user currently has active (non-expired, non-revoked) access
     /// via a subscription to a given device.
     pub fn verify_access(env: Env, device_id: Symbol, user: Address) -> bool {
+        let revoked: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::RevokedAccess(user.clone(), device_id.clone()))
+            .unwrap_or(false);
+        if revoked {
+            return false;
+        }
         let key = DataKey::Subscription(user, device_id);
         let sub: Option<Subscription> = env.storage().instance().get(&key);
         match sub {
