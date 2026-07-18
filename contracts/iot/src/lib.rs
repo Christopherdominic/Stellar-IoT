@@ -4,6 +4,40 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol, Vec,
 };
 
+// ── Token-whitelist / device-accepted-tokens helpers ─────────────────────────
+
+/// Returns true if `token` is in the global admin-managed whitelist.
+fn token_whitelisted(env: &Env, token: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get::<_, bool>(&DataKey::TokenWhitelist(token.clone()))
+        .unwrap_or(false)
+}
+
+/// Returns true if `token` is accepted by the device (or device has no restriction).
+fn token_accepted_by_device(env: &Env, device_id: &Symbol, token: &Address) -> bool {
+    let accepted: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::DeviceTokens(device_id.clone()))
+        .unwrap_or_else(|| Vec::new(env));
+    // empty list = accept all whitelisted tokens
+    if accepted.is_empty() {
+        return true;
+    }
+    accepted.contains(token)
+}
+
+/// Panic unless the token is whitelisted AND accepted by the device.
+fn require_token_valid(env: &Env, device_id: &Symbol, token: &Address) {
+    if !token_whitelisted(env, token) {
+        panic!("token not whitelisted");
+    }
+    if !token_accepted_by_device(env, device_id, token) {
+        panic!("token not accepted by device");
+    }
+}
+
 const FEE_DENOMINATOR: i128 = 10_000;
 /// Credit TTL: 30 days in ledgers (~5 s/ledger). In tests use a short TTL.
 #[cfg(not(test))]
@@ -56,6 +90,28 @@ pub struct Credit {
     pub expires_at: u32, // ledger sequence
 }
 
+/// Subscription tier selecting duration and discount.
+#[contracttype]
+#[derive(Clone, PartialEq, Debug)]
+pub enum SubscriptionTier {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+/// On-chain subscription record.
+#[contracttype]
+#[derive(Clone)]
+pub struct Subscription {
+    pub user: Address,
+    pub device_id: Symbol,
+    pub tier: SubscriptionTier,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
+    pub amount_paid: i128,
+    pub active: bool,
+}
+
 #[contracttype]
 pub enum DataKey {
     Admin,
@@ -65,10 +121,18 @@ pub enum DataKey {
     DeviceOwner(Symbol),
     /// Prepaid credits: (user, device_id) → Credit
     Credit(Address, Symbol),
+    /// Per-user, per-device subscription record
+    Subscription(Address, Symbol),
     /// true when contract is paused
     Paused,
     /// ledger sequence at which unpause was scheduled
     UnpauseAt,
+    /// Admin token whitelist: Address → bool
+    TokenWhitelist(Address),
+    /// Per-device accepted token list: Symbol → Vec<Address>
+    DeviceTokens(Symbol),
+    /// Price oracle: (device_id, token) → i128 (price in that token)
+    TokenPrice(Symbol, Address),
 }
 
 #[contract]
@@ -141,6 +205,83 @@ impl IotContract {
         env.storage()
             .instance()
             .get(&DataKey::DeviceOwner(device_id))
+    }
+
+    // ── Token whitelist (admin) ──────────────────────────────────────────────
+
+    /// Add a SAC token to the platform-wide whitelist. Admin only.
+    pub fn add_token(env: Env, admin: Address, token: Address) {
+        Self::require_admin(env.clone(), admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenWhitelist(token), &true);
+    }
+
+    /// Remove a token from the whitelist. Admin only.
+    pub fn remove_token(env: Env, admin: Address, token: Address) {
+        Self::require_admin(env.clone(), admin);
+        env.storage()
+            .instance()
+            .remove(&DataKey::TokenWhitelist(token));
+    }
+
+    /// Returns true if the token is whitelisted.
+    pub fn is_token_whitelisted(env: Env, token: Address) -> bool {
+        token_whitelisted(&env, &token)
+    }
+
+    // ── Device accepted tokens (device owner) ───────────────────────────────
+
+    /// Set the list of tokens accepted by a device. Empty list = accept all whitelisted.
+    /// Caller must be the device owner.
+    pub fn set_device_accepted_tokens(
+        env: Env,
+        owner: Address,
+        device_id: Symbol,
+        tokens: Vec<Address>,
+    ) {
+        owner.require_auth();
+        let stored_owner: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DeviceOwner(device_id.clone()))
+            .unwrap_or_else(|| panic!("device not registered"));
+        if owner != stored_owner {
+            panic!("not device owner");
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeviceTokens(device_id), &tokens);
+    }
+
+    /// Get the accepted token list for a device.
+    pub fn get_device_accepted_tokens(env: Env, device_id: Symbol) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DeviceTokens(device_id))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    // ── Price oracle ─────────────────────────────────────────────────────────
+
+    /// Set the price of a device in a specific token. Admin only.
+    pub fn set_token_price(env: Env, admin: Address, device_id: Symbol, token: Address, price: i128) {
+        Self::require_admin(env.clone(), admin);
+        if price <= 0 {
+            panic!("price must be positive");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenPrice(device_id, token), &price);
+    }
+
+    /// Get the price of a device in a specific token.
+    /// Falls back to the base device price if no token-specific price is set.
+    pub fn get_token_price(env: Env, device_id: Symbol, token: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TokenPrice(device_id.clone(), token))
+            .unwrap_or_else(|| Self::get_device_price(env.clone(), device_id))
     }
 
     // ── Emergency pause ──────────────────────────────────────────────────────
@@ -250,6 +391,12 @@ impl IotContract {
             if price <= 0 {
                 panic!("device not registered");
             }
+
+            // Validate token for each device.
+            require_token_valid(&env, &device_id, &token);
+
+            // Use token-specific price if set.
+            let price = Self::get_token_price(env.clone(), device_id.clone(), token.clone());
             if full_amount < price {
                 panic!("amount below device price");
             }
@@ -286,7 +433,7 @@ impl IotContract {
 
         env.events().publish(
             (symbol_short!("bulk"), user.clone()),
-            (n as u32, discount_bps),
+            (n as u32, discount_bps, token),
         );
     }
 
@@ -318,6 +465,10 @@ impl IotContract {
     ) -> bool {
         user.require_auth();
 
+        if Self::is_paused(env.clone()) {
+            panic!("contract paused");
+        }
+
         // Check active subscription first — free access for subscribers.
         if Self::verify_access(env.clone(), device_id.clone(), user.clone()) {
             env.events()
@@ -329,6 +480,12 @@ impl IotContract {
         if price <= 0 {
             return false;
         }
+
+        // Validate token is whitelisted and accepted by this device.
+        require_token_valid(&env, &device_id, &token);
+
+        // Use token-specific price if set.
+        let price = Self::get_token_price(env.clone(), device_id.clone(), token.clone());
 
         let owner = Self::get_device_owner(env.clone(), device_id.clone())
             .unwrap_or_else(|| panic!("device owner not found"));
@@ -406,6 +563,7 @@ impl IotContract {
                 pay_amount,
                 owner_amount,
                 platform_fee,
+                token.clone(),
             ),
         );
         env.events()
@@ -454,6 +612,9 @@ impl IotContract {
         if base_price <= 0 {
             panic!("device not found or price not set");
         }
+
+        // Validate token is whitelisted and accepted by this device.
+        require_token_valid(&env, &device_id, &token);
 
         let subscription_price = Self::compute_subscription_price(base_price, tier.clone());
         if amount < subscription_price {
@@ -511,7 +672,7 @@ impl IotContract {
 
         env.events().publish(
             (symbol_short!("subscrib"), device_id.clone()),
-            (user.clone(), tier_to_u32(tier), subscription_price, end_ledger),
+            (user.clone(), tier_to_u32(tier), subscription_price, end_ledger, token),
         );
 
         sub

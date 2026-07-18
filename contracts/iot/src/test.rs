@@ -18,7 +18,10 @@ fn setup_with_fee(fee_bps: i128) -> (Env, Address, Address, Address) {
         .register_stellar_asset_contract_v2(token_admin)
         .address();
 
-    IotContractClient::new(&env, &contract_id).initialize(&admin, &fee_bps);
+    let c = IotContractClient::new(&env, &contract_id);
+    c.initialize(&admin, &fee_bps);
+    // Whitelist the default token so existing tests keep passing.
+    c.add_token(&admin, &token_id);
 
     (env, contract_id, token_id, admin)
 }
@@ -723,4 +726,163 @@ fn test_unpause_after_timelock_succeeds() {
 fn test_execute_unpause_without_schedule_panics() {
     let (env, cid, _, admin) = setup();
     IotContractClient::new(&env, &cid).execute_unpause(&admin);
+}
+
+// ── multi-token payment support ───────────────────────────────────────────────
+
+/// Returns a second token that is NOT yet whitelisted.
+fn make_token(env: &Env) -> Address {
+    let token_admin = Address::generate(env);
+    env.register_stellar_asset_contract_v2(token_admin).address()
+}
+
+#[test]
+fn test_add_and_query_token_whitelist() {
+    let (env, cid, _, admin) = setup();
+    let c = IotContractClient::new(&env, &cid);
+    let tok2 = make_token(&env);
+
+    assert!(!c.is_token_whitelisted(&tok2));
+    c.add_token(&admin, &tok2);
+    assert!(c.is_token_whitelisted(&tok2));
+    c.remove_token(&admin, &tok2);
+    assert!(!c.is_token_whitelisted(&tok2));
+}
+
+#[test]
+#[should_panic(expected = "token not whitelisted")]
+fn test_request_access_non_whitelisted_token_panics() {
+    let (env, cid, _, _) = setup();
+    let c = IotContractClient::new(&env, &cid);
+    let owner = Address::generate(&env);
+    let user = Address::generate(&env);
+    let bad_token = make_token(&env); // not whitelisted
+
+    c.init_device(&symbol_short!("d1"), &1_000, &owner);
+    token::StellarAssetClient::new(&env, &bad_token).mint(&user, &1_000);
+    c.request_access(&symbol_short!("d1"), &user, &bad_token, &1_000);
+}
+
+#[test]
+fn test_request_access_with_whitelisted_second_token() {
+    let (env, cid, _, admin) = setup_with_fee(0);
+    let c = IotContractClient::new(&env, &cid);
+    let tok2 = make_token(&env);
+    c.add_token(&admin, &tok2);
+
+    let owner = Address::generate(&env);
+    let user = Address::generate(&env);
+    c.init_device(&symbol_short!("d1"), &500, &owner);
+    token::StellarAssetClient::new(&env, &tok2).mint(&user, &500);
+
+    assert!(c.request_access(&symbol_short!("d1"), &user, &tok2, &500));
+    assert_eq!(token::Client::new(&env, &tok2).balance(&owner), 500);
+}
+
+#[test]
+fn test_set_and_get_device_accepted_tokens() {
+    let (env, cid, _, admin) = setup();
+    let c = IotContractClient::new(&env, &cid);
+    let owner = Address::generate(&env);
+    let tok2 = make_token(&env);
+    c.add_token(&admin, &tok2);
+
+    c.init_device(&symbol_short!("d1"), &1_000, &owner);
+
+    // By default, empty = accept all whitelisted.
+    assert_eq!(c.get_device_accepted_tokens(&symbol_short!("d1")).len(), 0);
+
+    // Restrict to tok2 only.
+    let mut accepted = soroban_sdk::Vec::new(&env);
+    accepted.push_back(tok2.clone());
+    c.set_device_accepted_tokens(&owner, &symbol_short!("d1"), &accepted);
+    assert_eq!(c.get_device_accepted_tokens(&symbol_short!("d1")).len(), 1);
+    assert!(c.get_device_accepted_tokens(&symbol_short!("d1")).contains(&tok2));
+}
+
+#[test]
+#[should_panic(expected = "token not accepted by device")]
+fn test_request_access_token_not_accepted_by_device_panics() {
+    let (env, cid, token_id, admin) = setup();
+    let c = IotContractClient::new(&env, &cid);
+    let owner = Address::generate(&env);
+    let tok2 = make_token(&env);
+    c.add_token(&admin, &tok2);
+
+    c.init_device(&symbol_short!("d1"), &1_000, &owner);
+
+    // Restrict device to tok2 only.
+    let mut accepted = soroban_sdk::Vec::new(&env);
+    accepted.push_back(tok2.clone());
+    c.set_device_accepted_tokens(&owner, &symbol_short!("d1"), &accepted);
+
+    // Try paying with token_id (whitelisted but not in device list).
+    let user = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token_id).mint(&user, &1_000);
+    c.request_access(&symbol_short!("d1"), &user, &token_id, &1_000);
+}
+
+#[test]
+fn test_token_price_oracle_overrides_base_price() {
+    let (env, cid, _, admin) = setup_with_fee(0);
+    let c = IotContractClient::new(&env, &cid);
+    let tok2 = make_token(&env);
+    c.add_token(&admin, &tok2);
+
+    let owner = Address::generate(&env);
+    let user = Address::generate(&env);
+    c.init_device(&symbol_short!("d1"), &1_000, &owner);
+
+    // Set a different price for tok2.
+    c.set_token_price(&admin, &symbol_short!("d1"), &tok2, &200);
+    assert_eq!(c.get_token_price(&symbol_short!("d1"), &tok2), 200);
+    // Falls back to base price when no oracle entry.
+    assert_eq!(c.get_token_price(&symbol_short!("d1"), &Address::generate(&env)), 1_000);
+
+    // Pay with tok2 using oracle price.
+    token::StellarAssetClient::new(&env, &tok2).mint(&user, &200);
+    assert!(c.request_access(&symbol_short!("d1"), &user, &tok2, &200));
+    assert_eq!(token::Client::new(&env, &tok2).balance(&owner), 200);
+}
+
+#[test]
+fn test_bulk_access_with_second_whitelisted_token() {
+    let (env, cid, _, admin) = setup_with_fee(0);
+    let c = IotContractClient::new(&env, &cid);
+    let tok2 = make_token(&env);
+    c.add_token(&admin, &tok2);
+
+    let owner = Address::generate(&env);
+    let user = Address::generate(&env);
+    c.init_device(&Symbol::new(&env, "dev1"), &500, &owner);
+
+    token::StellarAssetClient::new(&env, &tok2).mint(&user, &500);
+    let (ids, amts) = make_bulk(&env, &[("dev1", 500)]);
+    c.purchase_bulk_access(&user, &tok2, &ids, &amts);
+
+    assert_eq!(c.get_credit(&user, &Symbol::new(&env, "dev1")), 500);
+}
+
+#[test]
+#[should_panic(expected = "token not whitelisted")]
+fn test_bulk_access_non_whitelisted_token_panics() {
+    let (env, cid, _, _) = setup_with_fee(0);
+    let c = IotContractClient::new(&env, &cid);
+    let bad_token = make_token(&env);
+    let owner = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    c.init_device(&Symbol::new(&env, "dev1"), &500, &owner);
+    token::StellarAssetClient::new(&env, &bad_token).mint(&user, &500);
+    let (ids, amts) = make_bulk(&env, &[("dev1", 500)]);
+    c.purchase_bulk_access(&user, &bad_token, &ids, &amts);
+}
+
+#[test]
+#[should_panic(expected = "admin required")]
+fn test_add_token_non_admin_panics() {
+    let (env, cid, _, _) = setup();
+    let impostor = Address::generate(&env);
+    let tok = make_token(&env);
+    IotContractClient::new(&env, &cid).add_token(&impostor, &tok);
 }
