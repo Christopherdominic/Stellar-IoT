@@ -436,3 +436,10 @@ pub async fn get_owner_earnings(
 pub struct OwnerDevicesQuery {
     pub owner_address: String,
 }
+
+/// `GET /earnings/devices` — per-device status and earnings for the owner's device list.
+pub async fn get_owner_devices(
+    Query(query): Query<OwnerDevicesQuery>,
+) -> Json<Vec<OwnerDeviceStatus>> {
+    Json(analytics::get_owner_device_statuses(&query.owner_address))
+}
