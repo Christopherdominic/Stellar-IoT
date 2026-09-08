@@ -419,3 +419,15 @@ pub async fn record_qr_scan(
 pub async fn get_qr_analytics(Path(id): Path<String>) -> Json<QrScanAnalytics> {
     Json(services::get_qr_analytics(&id))
 }
+
+// ─── Earnings / Owner Dashboard ─────────────────────────────────────────────────
+
+/// `GET /earnings` — aggregate earnings summary and time-series for a device owner.
+///
+/// Query params: `owner_address` (required), `period` (`daily` | `weekly` | `monthly`),
+/// `lookback` (number of periods).
+pub async fn get_owner_earnings(
+    Query(query): Query<OwnerEarningsQuery>,
+) -> Json<OwnerEarningsResponse> {
+    Json(analytics::generate_owner_report(&query))
+}
