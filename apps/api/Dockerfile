@@ -1,5 +1,7 @@
 # ---- Build stage ----------------------------------------------------------
-FROM rust:1.82-bookworm AS builder
+# Track the latest stable 1.x toolchain: a pinned older tag can fall behind
+# transitive dependencies that require newer edition/MSRV support.
+FROM rust:1-bookworm AS builder
 WORKDIR /app
 
 # Cache dependency compilation separately from source changes: build a dummy
