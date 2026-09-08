@@ -186,16 +186,17 @@ pub fn get_owner_device_statuses(owner_address: &str) -> Vec<OwnerDeviceStatus> 
                 .unwrap()
                 .get(&d.id)
                 .and_then(|s| s.last_seen.map(|t| t.to_rfc3339()));
+            let online = DEVICE_STATUSES
+                .read()
+                .unwrap()
+                .get(&d.id)
+                .map(|s| s.online)
+                .unwrap_or(true);
 
             OwnerDeviceStatus {
                 id: d.id,
                 name: d.name,
-                online: DEVICE_STATUSES
-                    .read()
-                    .unwrap()
-                    .get(&d.id)
-                    .map(|s| s.online)
-                    .unwrap_or(true),
+                online,
                 uptime_pct,
                 last_seen,
                 total_sessions,
