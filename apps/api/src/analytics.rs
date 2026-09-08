@@ -473,7 +473,7 @@ fn round2(v: f64) -> f64 {
 }
 
 /// FNV-1a 64-bit hash for deterministic pseudo-randomness.
-fn fnv1a_hash(s: &str) -> u64 {
+pub(crate) fn fnv1a_hash(s: &str) -> u64 {
     let mut hash: u64 = 14_695_981_039_346_656_037;
     for byte in s.bytes() {
         hash ^= byte as u64;
