@@ -1,0 +1,27 @@
+services:
+  api:
+    build:
+      context: ./apps/api
+    ports:
+      - "8000:8000"
+    environment:
+      RUST_LOG: info
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-secret}
+      HORIZON_URL: ${HORIZON_URL:-https://horizon-testnet.stellar.org}
+      STELLAR_NETWORK_PASSPHRASE: ${STELLAR_NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Baked into the client bundle at build time. Browsers hit the API
+        # through the published host port, not the Docker-internal network,
+        # so this must stay a host-reachable URL, not "http://api:8000".
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
