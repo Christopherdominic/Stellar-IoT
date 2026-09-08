@@ -5,7 +5,7 @@ use crate::models::{
     PaymentRequest, PaymentResponse, Session, HeartbeatRequest, TelemetryUploadRequest,
     Review, ReviewRequest, DeviceListQuery, DeviceRegistrationRequest, DeviceRegistrationResponse,
     DeviceUpdateRequest, ManagedDevice, PaymentHistoryQuery, QrScanRequest, QrScanAnalytics,
-    OwnerEarningsQuery, OwnerEarningsResponse,
+    OwnerEarningsQuery, OwnerEarningsResponse, OwnerDeviceStatus,
 };
 use crate::services;
 use axum::{
