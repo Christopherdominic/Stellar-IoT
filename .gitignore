@@ -28,7 +28,10 @@ npm-debug.log*
 yarn-debug.log*
 
 # Rust
+# Cargo.lock is tracked for apps/api (a binary, where a committed lockfile
+# gives reproducible builds) but not for the contracts/iot library crate.
 Cargo.lock
+!apps/api/Cargo.lock
 **/*.rs.bk
 
 # Wasm
