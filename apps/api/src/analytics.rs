@@ -186,16 +186,17 @@ pub fn get_owner_device_statuses(owner_address: &str) -> Vec<OwnerDeviceStatus> 
                 .unwrap()
                 .get(&d.id)
                 .and_then(|s| s.last_seen.map(|t| t.to_rfc3339()));
+            let online = DEVICE_STATUSES
+                .read()
+                .unwrap()
+                .get(&d.id)
+                .map(|s| s.online)
+                .unwrap_or(true);
 
             OwnerDeviceStatus {
                 id: d.id,
                 name: d.name,
-                online: DEVICE_STATUSES
-                    .read()
-                    .unwrap()
-                    .get(&d.id)
-                    .map(|s| s.online)
-                    .unwrap_or(true),
+                online,
                 uptime_pct,
                 last_seen,
                 total_sessions,
@@ -472,7 +473,7 @@ fn round2(v: f64) -> f64 {
 }
 
 /// FNV-1a 64-bit hash for deterministic pseudo-randomness.
-fn fnv1a_hash(s: &str) -> u64 {
+pub(crate) fn fnv1a_hash(s: &str) -> u64 {
     let mut hash: u64 = 14_695_981_039_346_656_037;
     for byte in s.bytes() {
         hash ^= byte as u64;

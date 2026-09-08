@@ -616,8 +616,8 @@ pub fn process_withdrawal(
     // Simulate a Stellar transaction hash.
     let tx_hash = format!(
         "a1b2c3d4e5f6{}{}",
-        &fnv1a_hash(owner_address).to_string()[..8],
-        &fnv1a_hash(destination).to_string()[..8],
+        &crate::analytics::fnv1a_hash(owner_address).to_string()[..8],
+        &crate::analytics::fnv1a_hash(destination).to_string()[..8],
     );
     // Simulate a nominal network fee in stroops (1 stroop = 0.0000001 XLM).
     let fee = 0.00001;

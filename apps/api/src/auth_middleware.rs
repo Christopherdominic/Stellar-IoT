@@ -12,6 +12,7 @@ use std::env;
 #[derive(Clone)]
 pub struct AuthenticatedOwner(pub String);
 
+#[async_trait::async_trait]
 impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedOwner {
     type Rejection = (StatusCode, &'static str);
 

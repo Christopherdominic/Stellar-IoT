@@ -5,6 +5,8 @@ use crate::models::{
     PaymentRequest, PaymentResponse, Session, HeartbeatRequest, TelemetryUploadRequest,
     Review, ReviewRequest, DeviceListQuery, DeviceRegistrationRequest, DeviceRegistrationResponse,
     DeviceUpdateRequest, ManagedDevice, PaymentHistoryQuery, QrScanRequest, QrScanAnalytics,
+    OwnerEarningsQuery, OwnerEarningsResponse, OwnerDeviceStatus, WithdrawalRequest,
+    WithdrawalResponse,
 };
 use crate::services;
 use axum::{
@@ -416,4 +418,44 @@ pub async fn record_qr_scan(
 /// `GET /devices/:id/qr-analytics` — QR-scan analytics for a device.
 pub async fn get_qr_analytics(Path(id): Path<String>) -> Json<QrScanAnalytics> {
     Json(services::get_qr_analytics(&id))
+}
+
+// ─── Earnings / Owner Dashboard ─────────────────────────────────────────────────
+
+/// `GET /earnings` — aggregate earnings summary and time-series for a device owner.
+///
+/// Query params: `owner_address` (required), `period` (`daily` | `weekly` | `monthly`),
+/// `lookback` (number of periods).
+pub async fn get_owner_earnings(
+    Query(query): Query<OwnerEarningsQuery>,
+) -> Json<OwnerEarningsResponse> {
+    Json(analytics::generate_owner_report(&query))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OwnerDevicesQuery {
+    pub owner_address: String,
+}
+
+/// `GET /earnings/devices` — per-device status and earnings for the owner's device list.
+pub async fn get_owner_devices(
+    Query(query): Query<OwnerDevicesQuery>,
+) -> Json<Vec<OwnerDeviceStatus>> {
+    Json(analytics::get_owner_device_statuses(&query.owner_address))
+}
+
+/// `POST /earnings/withdraw` — withdraw accumulated earnings to a destination address.
+pub async fn withdraw_earnings(
+    Json(req): Json<WithdrawalRequest>,
+) -> Result<Json<WithdrawalResponse>, (StatusCode, String)> {
+    match services::process_withdrawal(&req.owner_address, req.amount, &req.destination_address) {
+        Ok((tx_hash, fee)) => Ok(Json(WithdrawalResponse {
+            success: true,
+            tx_hash,
+            amount: req.amount,
+            fee,
+            message: "Withdrawal submitted".to_string(),
+        })),
+        Err(e) => Err((StatusCode::BAD_REQUEST, e)),
+    }
 }
