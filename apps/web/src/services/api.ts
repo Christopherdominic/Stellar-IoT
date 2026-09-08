@@ -12,6 +12,10 @@ import {
   PaymentHistoryFilters,
   PaymentHistoryResponse,
   QrScanAnalytics,
+  OwnerEarningsResponse,
+  OwnerDeviceStatus,
+  WithdrawalRequest,
+  WithdrawalResponse,
 } from '@/types'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -178,5 +182,36 @@ export async function recordQrScan(deviceId: string, source?: string): Promise<v
 export async function getQrAnalytics(deviceId: string): Promise<QrScanAnalytics> {
   const response = await fetch(`${API_URL}/devices/${deviceId}/qr-analytics`)
   if (!response.ok) throw new Error('Failed to fetch QR analytics')
+  return response.json()
+}
+
+// ─── Earnings / Owner Dashboard ───────────────────────────────────────────────
+
+export async function getOwnerEarnings(
+  ownerAddress: string,
+  period: ReportPeriod = 'daily',
+  lookback?: number,
+): Promise<OwnerEarningsResponse> {
+  const params = new URLSearchParams({ owner_address: ownerAddress, period })
+  if (lookback) params.set('lookback', String(lookback))
+  const response = await fetch(`${API_URL}/earnings?${params}`)
+  if (!response.ok) throw new Error('Failed to fetch earnings')
+  return response.json()
+}
+
+export async function getOwnerDevices(ownerAddress: string): Promise<OwnerDeviceStatus[]> {
+  const params = new URLSearchParams({ owner_address: ownerAddress })
+  const response = await fetch(`${API_URL}/earnings/devices?${params}`)
+  if (!response.ok) throw new Error('Failed to fetch owner devices')
+  return response.json()
+}
+
+export async function withdrawEarnings(req: WithdrawalRequest): Promise<WithdrawalResponse> {
+  const response = await fetch(`${API_URL}/earnings/withdraw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!response.ok) throw new Error('Withdrawal failed')
   return response.json()
 }
