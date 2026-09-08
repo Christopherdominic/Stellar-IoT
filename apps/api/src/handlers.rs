@@ -431,3 +431,8 @@ pub async fn get_owner_earnings(
 ) -> Json<OwnerEarningsResponse> {
     Json(analytics::generate_owner_report(&query))
 }
+
+#[derive(Debug, Deserialize)]
+pub struct OwnerDevicesQuery {
+    pub owner_address: String,
+}
