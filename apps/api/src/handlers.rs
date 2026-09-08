@@ -443,3 +443,19 @@ pub async fn get_owner_devices(
 ) -> Json<Vec<OwnerDeviceStatus>> {
     Json(analytics::get_owner_device_statuses(&query.owner_address))
 }
+
+/// `POST /earnings/withdraw` — withdraw accumulated earnings to a destination address.
+pub async fn withdraw_earnings(
+    Json(req): Json<WithdrawalRequest>,
+) -> Result<Json<WithdrawalResponse>, (StatusCode, String)> {
+    match services::process_withdrawal(&req.owner_address, req.amount, &req.destination_address) {
+        Ok((tx_hash, fee)) => Ok(Json(WithdrawalResponse {
+            success: true,
+            tx_hash,
+            amount: req.amount,
+            fee,
+            message: "Withdrawal submitted".to_string(),
+        })),
+        Err(e) => Err((StatusCode::BAD_REQUEST, e)),
+    }
+}
