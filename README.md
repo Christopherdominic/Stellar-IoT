@@ -2,6 +2,11 @@
 
 A decentralized IoT platform where devices require payment via the Stellar blockchain before granting access. This project demonstrates a pay-per-use model using Stellar's Soroban smart contracts.
 
+## Live Demo
+
+- **App**: [stellar-io-t-web.vercel.app](https://stellar-io-t-web.vercel.app)
+- **API**: [responsible-rejoicing-production-cd6a.up.railway.app](https://responsible-rejoicing-production-cd6a.up.railway.app)
+
 ## Architecture
 
 This monorepo contains three main components:
