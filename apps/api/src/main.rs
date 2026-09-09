@@ -13,9 +13,19 @@ mod webhook_handlers;
 mod webhook_service;
 
 use axum::{http::Method, Router};
+use std::env;
 use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
 use webhook_service::WebhookStore;
+
+fn bind_addr() -> SocketAddr {
+    let port = env::var("PORT")
+        .ok()
+        .map(|value| value.parse::<u16>().unwrap_or(8000))
+        .unwrap_or(8000);
+
+    SocketAddr::from(([0, 0, 0, 0], port))
+}
 
 #[tokio::main]
 async fn main() {
@@ -44,8 +54,28 @@ async fn main() {
     });
 
     // Start server
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
+    let addr = bind_addr();
     println!("🚀 Server running on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_addr;
+    use std::env;
+
+    #[test]
+    fn bind_addr_honors_port_environment_variable() {
+        let previous = env::var("PORT").ok();
+        env::set_var("PORT", "8123");
+
+        let addr = bind_addr();
+        assert_eq!(addr.port(), 8123);
+
+        match previous {
+            Some(value) => env::set_var("PORT", value),
+            None => env::remove_var("PORT"),
+        }
+    }
 }
