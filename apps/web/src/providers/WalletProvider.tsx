@@ -20,6 +20,19 @@ const WalletContext = createContext<WalletContextType | undefined>(undefined);
 // Use Stellar testnet server
 const server = new Horizon.Server('https://horizon-testnet.stellar.org');
 
+// freighter-api's requestAccess() has no internal timeout: if the extension
+// isn't installed, is disabled, or its content script otherwise never
+// responds, the promise hangs forever with no error. Race it against our
+// own timeout so the UI fails loudly instead of spinning indefinitely.
+const CONNECT_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 export const WalletProvider = ({ children }: { children: ReactNode }) => {
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [balance, setBalance] = useState<string>('0');
@@ -49,7 +62,11 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       // requestAccess() (not getAddress()) is what actually triggers Freighter's
       // permission popup on first connect — getAddress() only succeeds if the
       // site has already been granted access.
-      const addressObj = await requestAccess();
+      const addressObj = await withTimeout(
+        requestAccess(),
+        CONNECT_TIMEOUT_MS,
+        'Freighter did not respond. Make sure the extension is installed, enabled, and unlocked, then try again.'
+      );
       
       if (addressObj.error) {
         throw new Error(addressObj.error as string);
@@ -67,7 +84,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       const errorMessage = err instanceof Error ? err.message : 'Failed to connect wallet';
       setError(errorMessage);
       console.error('Wallet connection error:', err);
-      alert("Please install and enable the Freighter wallet extension.");
+      alert(errorMessage);
     } finally {
       setLoading(false);
     }
