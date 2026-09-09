@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { getAddress, signTransaction } from '@stellar/freighter-api';
+import { requestAccess, signTransaction } from '@stellar/freighter-api';
 import { Horizon } from '@stellar/stellar-sdk';
 
 interface WalletContextType {
@@ -46,7 +46,10 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       setLoading(true);
       setError(null);
       
-      const addressObj = await getAddress();
+      // requestAccess() (not getAddress()) is what actually triggers Freighter's
+      // permission popup on first connect — getAddress() only succeeds if the
+      // site has already been granted access.
+      const addressObj = await requestAccess();
       
       if (addressObj.error) {
         throw new Error(addressObj.error as string);
